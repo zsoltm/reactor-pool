@@ -49,9 +49,9 @@ import reactor.util.concurrent.Queues;
  *
  * @author Simon Baslé
  */
-abstract class SimplePool<POOLABLE> extends AbstractPool<POOLABLE> {
+abstract class SimplePool<POOLABLE, BORROW> extends AbstractPool<POOLABLE, BORROW> {
 
-    final Queue<QueuePooledRef<POOLABLE>> elements;
+    final Queue<QueuePooledRef<POOLABLE, BORROW>> elements;
 
     volatile int                                               acquired;
     @SuppressWarnings("rawtypes")
@@ -66,7 +66,7 @@ abstract class SimplePool<POOLABLE> extends AbstractPool<POOLABLE> {
 
     SimplePool(PoolConfig<POOLABLE> poolConfig) {
         super(poolConfig, Loggers.getLogger(SimplePool.class));
-        this.elements = Queues.<QueuePooledRef<POOLABLE>>unboundedMultiproducer().get();
+        this.elements = Queues.<QueuePooledRef<POOLABLE, BORROW>>unboundedMultiproducer().get();
     }
 
     @Override
@@ -103,13 +103,12 @@ abstract class SimplePool<POOLABLE> extends AbstractPool<POOLABLE> {
      * @return the next {@link reactor.pool.AbstractPool.Borrower} to serve
      */
     @Nullable
-    abstract Borrower<POOLABLE> pendingPoll();
+    abstract Borrower<POOLABLE, BORROW> pendingPoll();
 
     /**
      * @param pending a new {@link reactor.pool.AbstractPool.Borrower} to register as pending
-     * @return true if the pool had capacity to register this new pending
      */
-    abstract boolean pendingOffer(Borrower<POOLABLE> pending);
+    abstract void pendingOffer(Borrower<POOLABLE, BORROW> pending);
 
     @Override
     public Mono<PooledRef<POOLABLE>> acquire() {
@@ -122,7 +121,7 @@ abstract class SimplePool<POOLABLE> extends AbstractPool<POOLABLE> {
     }
 
     @Override
-    void doAcquire(Borrower<POOLABLE> borrower) {
+    void doAcquire(Borrower<POOLABLE, BORROW> borrower) {
         if (isDisposed()) {
             borrower.fail(new PoolShutdownException());
             return;
@@ -132,16 +131,15 @@ abstract class SimplePool<POOLABLE> extends AbstractPool<POOLABLE> {
         drain();
     }
 
-    @Override
-    boolean elementOffer(POOLABLE element) {
-        return elements.offer(createSlot(element));
+    void elementOffer(POOLABLE element) {
+        elements.offer(createSlot(element));
     }
 
-    QueuePooledRef<POOLABLE> createSlot(POOLABLE element) {
+    private QueuePooledRef<POOLABLE, BORROW> createSlot(POOLABLE element) {
         return new QueuePooledRef<>(this, element);
     }
 
-    QueuePooledRef<POOLABLE> recycleSlot(QueuePooledRef<POOLABLE> slot) {
+    private QueuePooledRef<POOLABLE, BORROW> recycleSlot(QueuePooledRef<POOLABLE, BORROW> slot) {
         return new QueuePooledRef<>(slot);
     }
 
@@ -151,7 +149,7 @@ abstract class SimplePool<POOLABLE> extends AbstractPool<POOLABLE> {
     }
 
     @SuppressWarnings("WeakerAccess")
-    final void maybeRecycleAndDrain(QueuePooledRef<POOLABLE> poolSlot) {
+    final void maybeRecycleAndDrain(QueuePooledRef<POOLABLE, BORROW> poolSlot) {
         if (!isDisposed()) {
             if (!poolConfig.evictionPredicate().test(poolSlot.poolable, poolSlot)) {
                 metricsRecorder.recordRecycled();
@@ -167,7 +165,7 @@ abstract class SimplePool<POOLABLE> extends AbstractPool<POOLABLE> {
         }
     }
 
-    void drain() {
+    private void drain() {
         if (WIP.getAndIncrement(this) == 0) {
             drainLoop();
         }
@@ -181,7 +179,7 @@ abstract class SimplePool<POOLABLE> extends AbstractPool<POOLABLE> {
 
             if (availableCount == 0) {
                 if (pendingCount > 0 && estimatedPermitCount > 0) {
-                    final Borrower<POOLABLE> borrower = pendingPoll(); //shouldn't be null
+                    final Borrower<POOLABLE, BORROW> borrower = pendingPoll(); //shouldn't be null
                     if (borrower == null) {
                         continue;
                     }
@@ -225,7 +223,7 @@ abstract class SimplePool<POOLABLE> extends AbstractPool<POOLABLE> {
             }
             else if (pendingCount > 0) {
                 //there are objects ready and unclaimed in the pool + a pending
-                QueuePooledRef<POOLABLE> slot = elements.poll();
+                QueuePooledRef<POOLABLE, BORROW> slot = elements.poll();
                 if (slot == null) continue;
 
                 //TODO test the idle eviction scenario
@@ -235,7 +233,7 @@ abstract class SimplePool<POOLABLE> extends AbstractPool<POOLABLE> {
                 }
 
                 //there is a party currently pending acquiring
-                Borrower<POOLABLE> inner = pendingPoll();
+                Borrower<POOLABLE, BORROW> inner = pendingPoll();
                 if (inner == null) {
                     elements.offer(slot);
                     continue;
@@ -251,16 +249,16 @@ abstract class SimplePool<POOLABLE> extends AbstractPool<POOLABLE> {
         }
     }
 
-    static final class QueuePooledRef<T> extends AbstractPooledRef<T> {
+    static final class QueuePooledRef<T, B> extends AbstractPooledRef<T> {
 
-        final SimplePool<T> pool;
+        final SimplePool<T, B> pool;
 
-        QueuePooledRef(SimplePool<T> pool, T poolable) {
+        QueuePooledRef(SimplePool<T, B> pool, T poolable) {
             super(poolable, pool.metricsRecorder, pool.clock);
             this.pool = pool;
         }
 
-        QueuePooledRef(QueuePooledRef<T> oldRef) {
+        QueuePooledRef(QueuePooledRef<T, B> oldRef) {
             super(oldRef);
             this.pool = oldRef.pool;
         }
@@ -307,12 +305,12 @@ abstract class SimplePool<POOLABLE> extends AbstractPool<POOLABLE> {
         }
     }
 
-    static final class QueueBorrowerMono<T> extends Mono<PooledRef<T>> {
+    static final class QueueBorrowerMono<T, B> extends Mono<PooledRef<T>> {
 
-        final SimplePool<T> parent;
+        final SimplePool<T, B> parent;
         final Duration      acquireTimeout;
 
-        QueueBorrowerMono(SimplePool<T> pool, Duration acquireTimeout) {
+        QueueBorrowerMono(SimplePool<T, B> pool, Duration acquireTimeout) {
             this.parent = pool;
             this.acquireTimeout = acquireTimeout;
         }
@@ -320,18 +318,18 @@ abstract class SimplePool<POOLABLE> extends AbstractPool<POOLABLE> {
         @Override
         public void subscribe(CoreSubscriber<? super PooledRef<T>> actual) {
             Objects.requireNonNull(actual, "subscribing with null");
-            Borrower<T> borrower = new Borrower<>(actual, parent, acquireTimeout);
+            Borrower<T, B> borrower = new Borrower<>(actual, parent, acquireTimeout, null);
             actual.onSubscribe(borrower);
         }
     }
 
-    private static final class QueuePoolRecyclerInner<T> implements CoreSubscriber<Void>, Scannable, Subscription {
+    private static final class QueuePoolRecyclerInner<T, B> implements CoreSubscriber<Void>, Scannable, Subscription {
 
         final CoreSubscriber<? super Void> actual;
-        final SimplePool<T>                pool;
+        final SimplePool<T, B>                pool;
 
         //poolable can be checked for null to protect against protocol errors
-        QueuePooledRef<T> pooledRef;
+        QueuePooledRef<T, B> pooledRef;
         Subscription upstream;
         long start;
 
@@ -340,7 +338,7 @@ abstract class SimplePool<POOLABLE> extends AbstractPool<POOLABLE> {
         @SuppressWarnings("rawtypes")
         static final AtomicIntegerFieldUpdater<QueuePoolRecyclerInner> ONCE = AtomicIntegerFieldUpdater.newUpdater(QueuePoolRecyclerInner.class, "once");
 
-        QueuePoolRecyclerInner(CoreSubscriber<? super Void> actual, QueuePooledRef<T> pooledRef) {
+        QueuePoolRecyclerInner(CoreSubscriber<? super Void> actual, QueuePooledRef<T, B> pooledRef) {
             this.actual = actual;
             this.pooledRef = Objects.requireNonNull(pooledRef, "pooledRef");
             this.pool = pooledRef.pool;
@@ -362,7 +360,7 @@ abstract class SimplePool<POOLABLE> extends AbstractPool<POOLABLE> {
 
         @Override
         public void onError(Throwable throwable) {
-            QueuePooledRef<T> slot = pooledRef;
+            QueuePooledRef<T, B> slot = pooledRef;
             pooledRef = null;
             if (slot == null) {
                 Operators.onErrorDropped(throwable, actual.currentContext());
@@ -385,7 +383,7 @@ abstract class SimplePool<POOLABLE> extends AbstractPool<POOLABLE> {
 
         @Override
         public void onComplete() {
-            QueuePooledRef<T> slot = pooledRef;
+            QueuePooledRef<T, B> slot = pooledRef;
             pooledRef = null;
             if (slot == null) {
                 return;
@@ -432,25 +430,25 @@ abstract class SimplePool<POOLABLE> extends AbstractPool<POOLABLE> {
         }
     }
 
-    private static final class QueuePoolRecyclerMono<T> extends Mono<Void> implements Scannable {
+    private static final class QueuePoolRecyclerMono<T, B> extends Mono<Void> implements Scannable {
 
         final Publisher<Void> source;
-        final AtomicReference<QueuePooledRef<T>> slotRef;
+        final AtomicReference<QueuePooledRef<T, B>> slotRef;
 
-        QueuePoolRecyclerMono(Publisher<Void> source, QueuePooledRef<T> poolSlot) {
+        QueuePoolRecyclerMono(Publisher<Void> source, QueuePooledRef<T, B> poolSlot) {
             this.source = source;
             this.slotRef = new AtomicReference<>(poolSlot);
         }
 
         @Override
         public void subscribe(CoreSubscriber<? super Void> actual) {
-            QueuePooledRef<T> slot = slotRef.getAndSet(null);
+            QueuePooledRef<T, B> slot = slotRef.getAndSet(null);
             if (slot == null) {
                 Operators.complete(actual);
             }
             else {
                 slot.markReleased();
-                QueuePoolRecyclerInner<T> qpr = new QueuePoolRecyclerInner<>(actual, slot);
+                QueuePoolRecyclerInner<T, B> qpr = new QueuePoolRecyclerInner<>(actual, slot);
                 source.subscribe(qpr);
             }
         }

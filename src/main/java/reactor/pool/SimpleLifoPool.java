@@ -32,12 +32,12 @@ import reactor.core.publisher.Mono;
  *
  * @author Simon Baslé
  */
-final class SimpleLifoPool<POOLABLE> extends SimplePool<POOLABLE> {
+final class SimpleLifoPool<POOLABLE> extends SimplePool<POOLABLE, Void> {
 
     @SuppressWarnings("rawtypes")
     private static final ConcurrentLinkedDeque TERMINATED = new ConcurrentLinkedDeque();
 
-    volatile ConcurrentLinkedDeque<Borrower<POOLABLE>>                                      pending;
+    private volatile ConcurrentLinkedDeque<Borrower<POOLABLE, Void>> pending;
     @SuppressWarnings("rawtypes")
     private static final AtomicReferenceFieldUpdater<SimpleLifoPool, ConcurrentLinkedDeque> PENDING = AtomicReferenceFieldUpdater.newUpdater(
             SimpleLifoPool.class, ConcurrentLinkedDeque.class, "pending");
@@ -48,33 +48,33 @@ final class SimpleLifoPool<POOLABLE> extends SimplePool<POOLABLE> {
     }
 
     @Override
-    boolean pendingOffer(Borrower<POOLABLE> pending) {
+    void pendingOffer(Borrower<POOLABLE, Void> pending) {
         int maxPending = poolConfig.maxPending();
         for (;;) {
             int currentPending = PENDING_COUNT.get(this);
             if (maxPending >= 0 && currentPending == maxPending) {
                 pending.fail(new PoolAcquirePendingLimitException(maxPending));
-                return false;
+                return;
             }
             else if (PENDING_COUNT.compareAndSet(this, currentPending, currentPending + 1)) {
                 this.pending.offerFirst(pending); //unbounded
-                return true;
+                return;
             }
         }
     }
 
     @Override
-    Borrower<POOLABLE> pendingPoll() {
-        ConcurrentLinkedDeque<Borrower<POOLABLE>> q = this.pending;
-        Borrower<POOLABLE> b = q.pollFirst();
+    Borrower<POOLABLE, Void> pendingPoll() {
+        ConcurrentLinkedDeque<Borrower<POOLABLE, Void>> q = this.pending;
+        Borrower<POOLABLE, Void> b = q.pollFirst();
         if (b != null) PENDING_COUNT.decrementAndGet(this);
         return b;
     }
 
     @Override
-    void cancelAcquire(Borrower<POOLABLE> borrower) {
+    void cancelAcquire(Borrower<POOLABLE, Void> borrower) {
         if (!isDisposed()) { //ignore pool disposed
-            ConcurrentLinkedDeque<Borrower<POOLABLE>> q = this.pending;
+            ConcurrentLinkedDeque<Borrower<POOLABLE, Void>> q = this.pending;
             if (q.remove(borrower)) {
                 PENDING_COUNT.decrementAndGet(this);
             }
@@ -85,9 +85,9 @@ final class SimpleLifoPool<POOLABLE> extends SimplePool<POOLABLE> {
     public Mono<Void> disposeLater() {
         return Mono.defer(() -> {
             @SuppressWarnings("unchecked")
-            ConcurrentLinkedDeque<Borrower<POOLABLE>> q = PENDING.getAndSet(this, TERMINATED);
+            ConcurrentLinkedDeque<Borrower<POOLABLE, Void>> q = PENDING.getAndSet(this, TERMINATED);
             if (q != TERMINATED) {
-                Borrower<POOLABLE> p;
+                Borrower<POOLABLE, Void> p;
                 while((p = q.pollFirst()) != null) {
                     p.fail(new PoolShutdownException());
                 }

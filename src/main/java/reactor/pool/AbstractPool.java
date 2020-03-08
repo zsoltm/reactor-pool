@@ -44,7 +44,7 @@ import reactor.util.context.Context;
  *
  * @author Simon Baslé
  */
-abstract class AbstractPool<POOLABLE> implements InstrumentedPool<POOLABLE>,
+abstract class AbstractPool<POOLABLE, BORROW> implements InstrumentedPool<POOLABLE>,
                                                  InstrumentedPool.PoolMetrics {
 
     //A pool should be rare enough that having instance loggers should be ok
@@ -102,17 +102,13 @@ abstract class AbstractPool<POOLABLE> implements InstrumentedPool<POOLABLE>,
         return poolConfig.maxPending() < 0 ? Integer.MAX_VALUE : poolConfig.maxPending();
     }
 
-    // == common methods to interact with idle/pending queues ==
-
-    abstract boolean elementOffer(POOLABLE element);
-
     /**
      * Note to implementors: stop the {@link Borrower} countdown by calling
      * {@link Borrower#stopPendingCountdown()} as soon as it is known that a resource is
      * available or is in the process of being allocated.
      */
-    abstract void doAcquire(Borrower<POOLABLE> borrower);
-    abstract void cancelAcquire(Borrower<POOLABLE> borrower);
+    abstract void doAcquire(Borrower<POOLABLE, BORROW> borrower);
+    abstract void cancelAcquire(Borrower<POOLABLE, BORROW> borrower);
 
     private void defaultDestroy(@Nullable POOLABLE poolable) {
         if (poolable instanceof Disposable) {
@@ -293,22 +289,25 @@ abstract class AbstractPool<POOLABLE> implements InstrumentedPool<POOLABLE>,
      *
      * @author Simon Baslé
      */
-    static final class Borrower<POOLABLE> extends AtomicBoolean implements Scannable, Subscription, Runnable  {
+    static final class Borrower<POOLABLE, BORROW> extends AtomicBoolean implements Scannable, Subscription, Runnable  {
 
         static final Disposable TIMEOUT_DISPOSED = Disposables.disposed();
 
         final CoreSubscriber<? super AbstractPooledRef<POOLABLE>> actual;
-        final AbstractPool<POOLABLE> pool;
+        final AbstractPool<POOLABLE, BORROW> pool;
         final Duration acquireTimeout;
+        final BORROW borrowMetadata;
 
         Disposable timeoutTask;
 
         Borrower(CoreSubscriber<? super AbstractPooledRef<POOLABLE>> actual,
-                AbstractPool<POOLABLE> pool,
-                Duration acquireTimeout) {
+                 AbstractPool<POOLABLE, BORROW> pool,
+                 Duration acquireTimeout,
+                 @Nullable BORROW borrowMetadata) {
             this.actual = actual;
             this.pool = pool;
             this.acquireTimeout = acquireTimeout;
+            this.borrowMetadata = borrowMetadata;
             this.timeoutTask = TIMEOUT_DISPOSED;
         }
 

@@ -30,12 +30,12 @@ import reactor.util.concurrent.Queues;
  *
  * @author Simon Baslé
  */
-final class SimpleFifoPool<POOLABLE> extends SimplePool<POOLABLE> {
+final class SimpleFifoPool<POOLABLE> extends SimplePool<POOLABLE, Void> {
 
     @SuppressWarnings("rawtypes")
     private static final Queue TERMINATED = Queues.empty().get();
 
-    volatile Queue<Borrower<POOLABLE>>                                      pending;
+    private volatile Queue<Borrower<POOLABLE, Void>> pending;
     @SuppressWarnings("rawtypes")
     private static final AtomicReferenceFieldUpdater<SimpleFifoPool, Queue> PENDING = AtomicReferenceFieldUpdater.newUpdater(
             SimpleFifoPool.class, Queue.class, "pending");
@@ -46,33 +46,33 @@ final class SimpleFifoPool<POOLABLE> extends SimplePool<POOLABLE> {
     }
 
     @Override
-    boolean pendingOffer(Borrower<POOLABLE> pending) {
+    void pendingOffer(Borrower<POOLABLE, Void> pending) {
         int maxPending = poolConfig.maxPending();
         for (;;) {
             int currentPending = PENDING_COUNT.get(this);
             if (maxPending >= 0 && currentPending == maxPending) {
                 pending.fail(new PoolAcquirePendingLimitException(maxPending));
-                return false;
+                return;
             }
             else if (PENDING_COUNT.compareAndSet(this, currentPending, currentPending + 1)) {
                 this.pending.offer(pending); //unbounded
-                return true;
+                return;
             }
         }
     }
 
     @Override
-    Borrower<POOLABLE> pendingPoll() {
-        Queue<Borrower<POOLABLE>> q = this.pending;
-        Borrower<POOLABLE> b = q.poll();
+    Borrower<POOLABLE, Void> pendingPoll() {
+        Queue<Borrower<POOLABLE, Void>> q = this.pending;
+        Borrower<POOLABLE, Void> b = q.poll();
         if (b != null) PENDING_COUNT.decrementAndGet(this);
         return b;
     }
 
     @Override
-    void cancelAcquire(Borrower<POOLABLE> borrower) {
+    void cancelAcquire(Borrower<POOLABLE, Void> borrower) {
         if (!isDisposed()) { //ignore pool disposed
-            Queue<Borrower<POOLABLE>> q = this.pending;
+            Queue<Borrower<POOLABLE, Void>> q = this.pending;
             if (q.remove(borrower)) {
                 PENDING_COUNT.decrementAndGet(this);
             }
@@ -83,7 +83,7 @@ final class SimpleFifoPool<POOLABLE> extends SimplePool<POOLABLE> {
     public Mono<Void> disposeLater() {
         return Mono.defer(() -> {
             @SuppressWarnings("unchecked")
-            Queue<Borrower<POOLABLE>> q = PENDING.getAndSet(this, TERMINATED);
+            Queue<Borrower<POOLABLE, Void>> q = PENDING.getAndSet(this, TERMINATED);
             if (q != TERMINATED) {
                 while(!q.isEmpty()) {
                     q.poll().fail(new PoolShutdownException());
