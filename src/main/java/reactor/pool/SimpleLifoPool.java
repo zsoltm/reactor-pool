@@ -17,6 +17,7 @@
 package reactor.pool;
 
 import java.util.Deque;
+import java.util.Queue;
 import java.util.concurrent.ConcurrentLinkedDeque;
 import java.util.concurrent.atomic.AtomicReferenceFieldUpdater;
 
@@ -37,10 +38,10 @@ final class SimpleLifoPool<POOLABLE> extends SimplePool<POOLABLE, Void> {
     @SuppressWarnings("rawtypes")
     private static final ConcurrentLinkedDeque TERMINATED = new ConcurrentLinkedDeque();
 
-    private volatile Deque<Borrower<POOLABLE, Void>> pending;
+    private volatile ConcurrentLinkedDeque<Borrower<POOLABLE, Void>> pending;
     @SuppressWarnings("rawtypes")
-    private static final AtomicReferenceFieldUpdater<SimpleLifoPool, ConcurrentLinkedDeque> PENDING = AtomicReferenceFieldUpdater.newUpdater(
-            SimpleLifoPool.class, ConcurrentLinkedDeque.class, "pending");
+    private static final AtomicReferenceFieldUpdater<SimpleLifoPool, ConcurrentLinkedDeque> PENDING =
+            AtomicReferenceFieldUpdater.newUpdater(SimpleLifoPool.class, ConcurrentLinkedDeque.class, "pending");
 
     public SimpleLifoPool(PoolConfig<POOLABLE> poolConfig) {
         super(poolConfig);
@@ -82,31 +83,15 @@ final class SimpleLifoPool<POOLABLE> extends SimplePool<POOLABLE, Void> {
     }
 
     @Override
-    public Mono<Void> disposeLater() {
-        return Mono.defer(() -> {
-            @SuppressWarnings("unchecked")
-            Deque<Borrower<POOLABLE, Void>> q = PENDING.getAndSet(this, TERMINATED);
-            if (q != TERMINATED) {
-                Borrower<POOLABLE, Void> p;
-                while((p = q.pollFirst()) != null) {
-                    p.fail(new PoolShutdownException());
-                }
-
-                Mono<Void> destroyMonos = Mono.when();
-
-                while (!elements.isEmpty()) {
-                    destroyMonos = destroyMonos.and(destroyPoolable(elements.poll()));
-                }
-
-                return destroyMonos;
-            }
-            return Mono.empty();
-        });
+    public boolean isDisposed() {
+        return PENDING.get(this) == TERMINATED;
     }
 
     @Override
-    public boolean isDisposed() {
-        return PENDING.get(this) == TERMINATED;
+    public Mono<Void> disposeLater() {
+        @SuppressWarnings("unchecked")
+        final Mono<Void> voidMono = super.disposeLater(PENDING, (Queue<Borrower<POOLABLE, Void>>) TERMINATED, this);
+        return voidMono;
     }
 
 }

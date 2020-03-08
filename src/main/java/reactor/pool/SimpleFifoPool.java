@@ -80,28 +80,15 @@ final class SimpleFifoPool<POOLABLE> extends SimplePool<POOLABLE, Void> {
     }
 
     @Override
-    public Mono<Void> disposeLater() {
-        return Mono.defer(() -> {
-            @SuppressWarnings("unchecked")
-            Queue<Borrower<POOLABLE, Void>> q = PENDING.getAndSet(this, TERMINATED);
-            if (q != TERMINATED) {
-                while(!q.isEmpty()) {
-                    q.poll().fail(new PoolShutdownException());
-                }
-
-                Mono<Void> destroyMonos = Mono.when();
-                while (!elements.isEmpty()) {
-                    destroyMonos = destroyMonos.and(destroyPoolable(elements.poll()));
-                }
-                return destroyMonos;
-            }
-            return Mono.empty();
-        });
+    public boolean isDisposed() {
+        return PENDING.get(this) == TERMINATED;
     }
 
     @Override
-    public boolean isDisposed() {
-        return PENDING.get(this) == TERMINATED;
+    public Mono<Void> disposeLater() {
+        @SuppressWarnings("unchecked")
+        final Mono<Void> voidMono = super.disposeLater(PENDING, (Queue<Borrower<POOLABLE, Void>>) TERMINATED, this);
+        return voidMono;
     }
 
 }

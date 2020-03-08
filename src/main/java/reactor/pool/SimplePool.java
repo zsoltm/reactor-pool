@@ -20,6 +20,7 @@ import java.util.Objects;
 import java.util.Queue;
 import java.util.concurrent.atomic.AtomicIntegerFieldUpdater;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.atomic.AtomicReferenceFieldUpdater;
 
 import org.reactivestreams.Publisher;
 import org.reactivestreams.Subscription;
@@ -247,6 +248,27 @@ abstract class SimplePool<POOLABLE, BORROW> extends AbstractPool<POOLABLE, BORRO
                 break;
             }
         }
+    }
+
+    @SuppressWarnings("rawtypes")
+    protected <P, T> Mono<Void> disposeLater(
+            AtomicReferenceFieldUpdater<P, T> pending, Queue<Borrower<POOLABLE, BORROW>> terminated, SimplePool<POOLABLE, BORROW> poolInstance) {
+        return Mono.defer(() -> {
+            @SuppressWarnings("unchecked")
+            Queue<Borrower<POOLABLE, BORROW>> q = (Queue<Borrower<POOLABLE, BORROW>>) pending.getAndSet((P) poolInstance, (T) terminated);
+            if (q != terminated) {
+                while(!q.isEmpty()) {
+                    q.poll().fail(new PoolShutdownException());
+                }
+
+                Mono<Void> destroyMonos = Mono.when();
+                while (!elements.isEmpty()) {
+                    destroyMonos = destroyMonos.and(destroyPoolable(elements.poll()));
+                }
+                return destroyMonos;
+            }
+            return Mono.empty();
+        });
     }
 
     static final class QueuePooledRef<T, B> extends AbstractPooledRef<T> {

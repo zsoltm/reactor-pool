@@ -830,6 +830,7 @@ public class CommonPoolTest {
 			}
 
 			if (!(pool instanceof AbstractPool)) throw new UnsupportedOperationException("expected an abstract pool");
+			@SuppressWarnings("unchecked")
 			AbstractPool<Integer, Void> abstractPool = (AbstractPool<Integer, Void>) pool;
 
 			assertThat(AbstractPool.PENDING_COUNT.get(abstractPool)).as("pending counter limited to 1").isEqualTo(1);
@@ -1595,8 +1596,8 @@ public class CommonPoolTest {
 		//destroy is fire-and-forget so the 500ms one will not have finished
 		assertThat(recorder.getDestroyCount()).as("destroy before 500ms").isEqualTo(1);
 
-		await().pollDelay(500, TimeUnit.MILLISECONDS)
-		       .atMost(600, TimeUnit.MILLISECONDS)
+		await().pollDelay(500 + 50, TimeUnit.MILLISECONDS)
+		       .atMost(700, TimeUnit.MILLISECONDS)
 		       .untilAsserted(() -> assertThat(recorder.getDestroyCount()).as("destroy after 500ms").isEqualTo(2));
 
 		long min = recorder.getDestroyHistogram().getMinValue();
