@@ -52,14 +52,14 @@ import reactor.util.concurrent.Queues;
  */
 abstract class SimplePool<POOLABLE, BORROW> extends AbstractPool<POOLABLE, BORROW> {
 
-    final Queue<QueuePooledRef<POOLABLE, BORROW>> elements;
+    private final Queue<QueuePooledRef<POOLABLE, BORROW>> elements;
 
-    volatile int                                               acquired;
+    private volatile int acquired;
     @SuppressWarnings("rawtypes")
     private static final AtomicIntegerFieldUpdater<SimplePool> ACQUIRED = AtomicIntegerFieldUpdater.newUpdater(
             SimplePool.class, "acquired");
 
-    volatile int                                               wip;
+    private volatile int wip;
     @SuppressWarnings("rawtypes")
     private static final AtomicIntegerFieldUpdater<SimplePool> WIP = AtomicIntegerFieldUpdater.newUpdater(
             SimplePool.class, "wip");
@@ -174,37 +174,44 @@ abstract class SimplePool<POOLABLE, BORROW> extends AbstractPool<POOLABLE, BORRO
 
     private void drainLoop() {
         for (;;) {
+            logger.trace("drain loop");
             int availableCount = elements.size();
             int pendingCount = PENDING_COUNT.get(this);
             int estimatedPermitCount = poolConfig.allocationStrategy().estimatePermitCount();
 
             if (availableCount == 0) {
                 if (pendingCount > 0 && estimatedPermitCount > 0) {
-                    final Borrower<POOLABLE, BORROW> borrower = pendingPoll(); //shouldn't be null
-                    if (borrower == null) {
-                        continue;
-                    }
-                    ACQUIRED.incrementAndGet(this);
+                    AtomicReference<Borrower<POOLABLE, BORROW>> borrowerRef = new AtomicReference<>(pendingPoll());
+                    if (borrowerRef.get() == null || borrowerRef.get().isCancelled()) continue;
+
+                    // inc acquired
                     int permits = poolConfig.allocationStrategy().getPermits(1);
-                    if (borrower.get() || permits == 0) {
-                        ACQUIRED.decrementAndGet(this);
-                        continue;
-                    }
-                    borrower.stopPendingCountdown();
+                    if (permits == 0) continue;
+
+                    ACQUIRED.incrementAndGet(this);
+
+                    // allocate pooled
+
                     long start = clock.millis();
                     Mono<POOLABLE> allocator = poolConfig.allocator();
                     Scheduler s = poolConfig.acquisitionScheduler();
                     if (s != Schedulers.immediate())  {
                         allocator = allocator.publishOn(s);
                     }
-                    allocator.subscribe(newInstance -> borrower.deliver(createSlot(newInstance)),
-                                    e -> {
-                                        metricsRecorder.recordAllocationFailureAndLatency(clock.millis() - start);
-                                        ACQUIRED.decrementAndGet(this);
-                                        poolConfig.allocationStrategy().returnPermits(1);
-                                        borrower.fail(e);
-                                    },
-                                    () -> metricsRecorder.recordAllocationSuccessAndLatency(clock.millis() - start));
+                    allocator.map(this::createSlot).subscribe(
+                            newSlot -> {
+                                logger.trace("slot created");
+                                borrowerRef.updateAndGet(this::swapPendingOptionally).deliver(newSlot);
+                            },
+                            e -> {
+                                metricsRecorder.recordAllocationFailureAndLatency(clock.millis() - start);
+                                ACQUIRED.decrementAndGet(this);
+                                poolConfig.allocationStrategy().returnPermits(1);
+                                borrowerRef.get().fail(e);
+                            },
+                            () -> metricsRecorder.recordAllocationSuccessAndLatency(clock.millis() - start));
+
+                    // handle warm up
 
                     int toWarmup = permits - 1;
                     for (int extra = 1; extra <= toWarmup; extra++) {
@@ -245,9 +252,18 @@ abstract class SimplePool<POOLABLE, BORROW> extends AbstractPool<POOLABLE, BORRO
             }
 
             if (WIP.addAndGet(this, -1) == 0) {
+                logger.trace("breaking drain loop");
                 break;
             }
         }
+    }
+
+    /**
+     *  Called after resource allocation, this might swap the borrower e.g. if there is a new, higher priority one
+     *  enqueued while the allocation completed.
+     */
+    protected Borrower<POOLABLE, BORROW> swapPendingOptionally(Borrower<POOLABLE, BORROW> borrower) {
+        return borrower; // return as is, no swap
     }
 
     @SuppressWarnings("rawtypes")
@@ -331,16 +347,22 @@ abstract class SimplePool<POOLABLE, BORROW> extends AbstractPool<POOLABLE, BORRO
 
         final SimplePool<T, B> parent;
         final Duration      acquireTimeout;
+        final B borrowMeta;
 
-        QueueBorrowerMono(SimplePool<T, B> pool, Duration acquireTimeout) {
+        QueueBorrowerMono(SimplePool<T, B> pool, Duration acquireTimeout, @Nullable B borrowMeta) {
             this.parent = pool;
             this.acquireTimeout = acquireTimeout;
+            this.borrowMeta = borrowMeta;
+        }
+
+        QueueBorrowerMono(SimplePool<T, B> pool, Duration acquireTimeout) {
+            this(pool, acquireTimeout, null);
         }
 
         @Override
         public void subscribe(CoreSubscriber<? super PooledRef<T>> actual) {
             Objects.requireNonNull(actual, "subscribing with null");
-            Borrower<T, B> borrower = new Borrower<>(actual, parent, acquireTimeout, null);
+            Borrower<T, B> borrower = new Borrower<>(actual, parent, acquireTimeout, borrowMeta);
             actual.onSubscribe(borrower);
         }
     }

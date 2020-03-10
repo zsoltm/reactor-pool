@@ -289,7 +289,7 @@ abstract class AbstractPool<POOLABLE, BORROW> implements InstrumentedPool<POOLAB
      *
      * @author Simon Baslé
      */
-    static final class Borrower<POOLABLE, BORROW> extends AtomicBoolean implements Scannable, Subscription, Runnable  {
+    static final class Borrower<POOLABLE, BORROW> implements Scannable, Subscription, Runnable  {
 
         static final Disposable TIMEOUT_DISPOSED = Disposables.disposed();
 
@@ -297,6 +297,7 @@ abstract class AbstractPool<POOLABLE, BORROW> implements InstrumentedPool<POOLAB
         final AbstractPool<POOLABLE, BORROW> pool;
         final Duration acquireTimeout;
         final BORROW borrowMetadata;
+        private final AtomicBoolean cancelled = new AtomicBoolean();
 
         Disposable timeoutTask;
 
@@ -313,7 +314,7 @@ abstract class AbstractPool<POOLABLE, BORROW> implements InstrumentedPool<POOLAB
 
         @Override
         public void run() {
-            if (Borrower.this.compareAndSet(false, true)) {
+            if (cancelled.compareAndSet(false, true)) {
                 pool.cancelAcquire(Borrower.this);
                 actual.onError(new PoolAcquireTimeoutException(acquireTimeout));
             }
@@ -345,16 +346,20 @@ abstract class AbstractPool<POOLABLE, BORROW> implements InstrumentedPool<POOLAB
 
         @Override
         public void cancel() {
-            set(true);
+            cancelled.set(true);
             pool.cancelAcquire(this);
             stopPendingCountdown();
+        }
+
+        boolean isCancelled() {
+            return cancelled.get();
         }
 
         @Override
         @Nullable
         @SuppressWarnings("rawtypes")
         public Object scanUnsafe(Attr key) {
-            if (key == Attr.CANCELLED) return get();
+            if (key == Attr.CANCELLED) return cancelled.get();
             if (key == Attr.REQUESTED_FROM_DOWNSTREAM) return 1;
             if (key == Attr.ACTUAL) return actual;
 
@@ -363,8 +368,7 @@ abstract class AbstractPool<POOLABLE, BORROW> implements InstrumentedPool<POOLAB
 
         void deliver(AbstractPooledRef<POOLABLE> poolSlot) {
             stopPendingCountdown();
-            if (get()) {
-                //CANCELLED
+            if (cancelled.get()) {
                 poolSlot.release().subscribe(aVoid -> {}, e -> Operators.onErrorDropped(e, Context.empty())); //actual mustn't receive onError
             }
             else {
@@ -376,14 +380,14 @@ abstract class AbstractPool<POOLABLE, BORROW> implements InstrumentedPool<POOLAB
 
         void fail(Throwable error) {
             stopPendingCountdown();
-            if (!get()) {
+            if (!cancelled.get()) {
                 actual.onError(error);
             }
         }
 
         @Override
         public String toString() {
-            return get() ? "Borrower(cancelled)" : "Borrower";
+            return cancelled.get() ? "Borrower(cancelled)" : "Borrower";
         }
     }
 

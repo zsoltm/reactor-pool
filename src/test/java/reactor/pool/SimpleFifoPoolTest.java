@@ -137,7 +137,7 @@ class SimpleFifoPoolTest {
         //we've finished processing, let's check resource has been automatically released
         assertThat(counter).as("after all emitted").hasValue(3);
         assertThat(pool.poolConfig.allocationStrategy().estimatePermitCount()).as("allocation permits").isZero();
-        assertThat(pool.elements).as("available").hasSize(1);
+        assertThat(pool.metrics().idleSize()).as("available").isEqualTo(1);
         assertThat(releaseRef).as("released").hasValue("Hello Reactive World");
     }
 
@@ -918,13 +918,13 @@ class SimpleFifoPoolTest {
 
         pool.dispose();
 
-        assertThat(pool.acquired).as("before releases").isEqualTo(3);
+        assertThat(pool.metrics().acquiredSize()).as("before releases").isEqualTo(3);
 
         acquired1.release().block();
         acquired2.release().block();
         acquired3.release().block();
 
-        assertThat(pool.acquired).as("after releases").isEqualTo(0);
+        assertThat(pool.metrics().acquiredSize()).as("after releases").isEqualTo(0);
     }
 
     @SuppressWarnings("FutureReturnValueIgnored")

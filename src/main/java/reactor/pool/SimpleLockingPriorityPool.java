@@ -1,22 +1,8 @@
-/*
- * Copyright (c) 2018-Present Pivotal Software Inc, All Rights Reserved.
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *       https://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
 package reactor.pool;
 
 import reactor.core.publisher.Mono;
 
+import java.time.Duration;
 import java.util.Comparator;
 import java.util.PriorityQueue;
 import java.util.Queue;
@@ -24,19 +10,20 @@ import java.util.concurrent.atomic.AtomicReferenceFieldUpdater;
 import java.util.concurrent.locks.ReentrantLock;
 
 /**
- * Non lock-free implementation of priority queue MPMC pending {@link Pool#acquire()} Monos serving them in priority
- * order, based on the supplied metadata describing priority, and the comparator supplied at pool construction time.
- *
- * See {@link SimplePool} for other characteristics of the simple pool.
- *
- * @author Simon Baslé
+ * Non lock-free implementation of MPMC priority queue. Pending Monos returned by {@link Pool#acquire()} are served in
+ * priority order, based on the supplied metadata and the comparator at pool construction time.
+ * <p>
+ * Since it uses lock, it is intended to be used for fewer longer running processing tasks rather than many short lived
+ * ones.
  */
-final class SimpleLockingPriorityPool<POOLABLE, PRIORITY> extends SimplePool<POOLABLE, PRIORITY> {
+final class SimpleLockingPriorityPool<POOLABLE, PRIORITY>
+        extends SimplePool<POOLABLE, PRIORITY> implements MetadataHandlingPool<POOLABLE, PRIORITY> {
 
     @SuppressWarnings("rawtypes")
-    private static final PriorityQueue TERMINATED = new PriorityQueue(0);
+    private static final PriorityQueue TERMINATED = new PriorityQueue(1);
 
     private final ReentrantLock lock = new ReentrantLock();
+    private final Comparator<Borrower<POOLABLE, PRIORITY>> borrowerComparator;
 
     private volatile PriorityQueue<Borrower<POOLABLE, PRIORITY>> pending;
     @SuppressWarnings("rawtypes")
@@ -45,7 +32,8 @@ final class SimpleLockingPriorityPool<POOLABLE, PRIORITY> extends SimplePool<POO
 
     public SimpleLockingPriorityPool(PoolConfig<POOLABLE> poolConfig, Comparator<PRIORITY> comparator) {
         super(poolConfig);
-        this.pending = new PriorityQueue<>(Comparator.comparing(borrower -> borrower.borrowMetadata, comparator));
+        borrowerComparator = Comparator.comparing(borrower -> borrower.borrowMetadata, comparator);
+        this.pending = new PriorityQueue<>(borrowerComparator);
     }
 
     @Override
@@ -69,10 +57,26 @@ final class SimpleLockingPriorityPool<POOLABLE, PRIORITY> extends SimplePool<POO
     Borrower<POOLABLE, PRIORITY> pendingPoll() {
         lock.lock();
         try {
-            Queue<Borrower<POOLABLE, PRIORITY>> q = this.pending;
-            Borrower<POOLABLE, PRIORITY> b = q.poll();
+            Borrower<POOLABLE, PRIORITY> b = this.pending.poll();
             if (b != null) PENDING_COUNT.decrementAndGet(this);
             return b;
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    @Override
+    protected Borrower<POOLABLE, PRIORITY> swapPendingOptionally(Borrower<POOLABLE, PRIORITY> borrower) {
+        lock.lock();
+        try {
+            Borrower<POOLABLE, PRIORITY> headBorrower = this.pending.peek();
+            if (headBorrower == null) return borrower;
+            if (borrowerComparator.compare(headBorrower, borrower) < 0) {
+                this.pending.poll();
+                this.pending.offer(borrower);
+                return headBorrower;
+            }
+            return borrower;
         } finally {
             lock.unlock();
         }
@@ -103,6 +107,11 @@ final class SimpleLockingPriorityPool<POOLABLE, PRIORITY> extends SimplePool<POO
         @SuppressWarnings("unchecked")
         final Mono<Void> voidMono = super.disposeLater(PENDING, (Queue<Borrower<POOLABLE, PRIORITY>>) TERMINATED, this);
         return voidMono;
+    }
+
+    @Override
+    public Mono<PooledRef<POOLABLE>> acquire(PRIORITY priority, Duration timeout) {
+        return new QueueBorrowerMono<>(this, timeout, priority);
     }
 
 }
