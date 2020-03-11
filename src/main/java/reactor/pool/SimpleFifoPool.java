@@ -15,6 +15,7 @@
  */
 package reactor.pool;
 
+import java.time.Duration;
 import java.util.Queue;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.atomic.AtomicReferenceFieldUpdater;
@@ -30,7 +31,7 @@ import reactor.util.concurrent.Queues;
  *
  * @author Simon Baslé
  */
-final class SimpleFifoPool<POOLABLE> extends SimplePool<POOLABLE, Void> {
+final class SimpleFifoPool<POOLABLE> extends SimplePool<POOLABLE, Void> implements Pool<POOLABLE>, InstrumentedPool {
 
     @SuppressWarnings("rawtypes")
     private static final Queue TERMINATED = Queues.empty().get();
@@ -91,4 +92,13 @@ final class SimpleFifoPool<POOLABLE> extends SimplePool<POOLABLE, Void> {
         return voidMono;
     }
 
+    @Override
+    public Mono<PooledRef<POOLABLE>> acquire() {
+        return super.acquire(Duration.ZERO);
+    }
+
+    @Override
+    public Mono<PooledRef<POOLABLE>> acquire(Duration timeout) {
+        return super.acquire(timeout);
+    }
 }

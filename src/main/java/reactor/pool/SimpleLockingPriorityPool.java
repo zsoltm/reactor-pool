@@ -113,5 +113,4 @@ final class SimpleLockingPriorityPool<POOLABLE, PRIORITY>
     public Mono<PooledRef<POOLABLE>> acquire(PRIORITY priority, Duration timeout) {
         return new QueueBorrowerMono<>(this, timeout, priority);
     }
-
 }

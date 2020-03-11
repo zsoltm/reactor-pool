@@ -147,6 +147,11 @@ class PoolBuilderTest {
         public Mono<Void> disposeLater() {
             return null;
         }
+
+        @Override
+        public PoolMetrics metrics() {
+            return null;
+        }
     }
 
     static class FooExtraConfig<T> extends DefaultPoolConfig<T> {

@@ -16,6 +16,7 @@
 
 package reactor.pool;
 
+import java.time.Duration;
 import java.util.Deque;
 import java.util.Queue;
 import java.util.concurrent.ConcurrentLinkedDeque;
@@ -33,7 +34,7 @@ import reactor.core.publisher.Mono;
  *
  * @author Simon Baslé
  */
-final class SimpleLifoPool<POOLABLE> extends SimplePool<POOLABLE, Void> {
+final class SimpleLifoPool<POOLABLE> extends SimplePool<POOLABLE, Void> implements Pool<POOLABLE>, InstrumentedPool {
 
     @SuppressWarnings("rawtypes")
     private static final ConcurrentLinkedDeque TERMINATED = new ConcurrentLinkedDeque();
@@ -92,6 +93,16 @@ final class SimpleLifoPool<POOLABLE> extends SimplePool<POOLABLE, Void> {
         @SuppressWarnings("unchecked")
         final Mono<Void> voidMono = super.disposeLater(PENDING, (Queue<Borrower<POOLABLE, Void>>) TERMINATED, this);
         return voidMono;
+    }
+
+    @Override
+    public Mono<PooledRef<POOLABLE>> acquire() {
+        return super.acquire(Duration.ZERO);
+    }
+
+    @Override
+    public Mono<PooledRef<POOLABLE>> acquire(Duration timeout) {
+        return super.acquire(timeout);
     }
 
 }

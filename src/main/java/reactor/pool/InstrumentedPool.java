@@ -22,7 +22,7 @@ package reactor.pool;
  *
  * @author Simon Baslé
  */
-public interface InstrumentedPool<POOLABLE> extends Pool<POOLABLE> {
+public interface InstrumentedPool {
 
 	/**
 	 * @return a {@link PoolMetrics} object to be used to get live gauges about the {@link Pool}

@@ -26,6 +26,7 @@ import org.reactivestreams.Publisher;
 import org.reactivestreams.Subscription;
 
 import reactor.core.CoreSubscriber;
+import reactor.core.Disposable;
 import reactor.core.Scannable;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -50,7 +51,7 @@ import reactor.util.concurrent.Queues;
  *
  * @author Simon Baslé
  */
-abstract class SimplePool<POOLABLE, BORROW> extends AbstractPool<POOLABLE, BORROW> {
+abstract class SimplePool<POOLABLE, BORROW> extends AbstractPool<POOLABLE, BORROW> implements Disposable {
 
     private final Queue<QueuePooledRef<POOLABLE, BORROW>> elements;
 
@@ -70,7 +71,6 @@ abstract class SimplePool<POOLABLE, BORROW> extends AbstractPool<POOLABLE, BORRO
         this.elements = Queues.<QueuePooledRef<POOLABLE, BORROW>>unboundedMultiproducer().get();
     }
 
-    @Override
     public Mono<Integer> warmup() {
         if (poolConfig.allocationStrategy().permitMinimum() > 0) {
             return Mono.defer(() -> {
@@ -111,13 +111,7 @@ abstract class SimplePool<POOLABLE, BORROW> extends AbstractPool<POOLABLE, BORRO
      */
     abstract void pendingOffer(Borrower<POOLABLE, BORROW> pending);
 
-    @Override
-    public Mono<PooledRef<POOLABLE>> acquire() {
-        return new QueueBorrowerMono<>(this, Duration.ZERO); //the mono is unknown to the pool until requested
-    }
-
-    @Override
-    public Mono<PooledRef<POOLABLE>> acquire(Duration timeout) {
+    protected Mono<PooledRef<POOLABLE>> acquire(Duration timeout) {
         return new QueueBorrowerMono<>(this, timeout); //the mono is unknown to the pool until requested
     }
 

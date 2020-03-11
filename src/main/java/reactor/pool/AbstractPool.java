@@ -44,8 +44,7 @@ import reactor.util.context.Context;
  *
  * @author Simon Baslé
  */
-abstract class AbstractPool<POOLABLE, BORROW> implements InstrumentedPool<POOLABLE>,
-                                                 InstrumentedPool.PoolMetrics {
+abstract class AbstractPool<POOLABLE, BORROW> implements InstrumentedPool, InstrumentedPool.PoolMetrics {
 
     //A pool should be rare enough that having instance loggers should be ok
     //This helps with testability of some methods that for now mainly log
@@ -70,7 +69,7 @@ abstract class AbstractPool<POOLABLE, BORROW> implements InstrumentedPool<POOLAB
     // == pool introspection methods ==
 
     @Override
-    public PoolMetrics metrics() {
+    public InstrumentedPool.PoolMetrics metrics() {
         return this;
     }
 

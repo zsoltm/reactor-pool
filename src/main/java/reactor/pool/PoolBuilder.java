@@ -17,6 +17,7 @@ package reactor.pool;
 
 import java.time.Clock;
 import java.time.Duration;
+import java.util.Comparator;
 import java.util.Objects;
 import java.util.concurrent.Callable;
 import java.util.function.BiPredicate;
@@ -306,7 +307,7 @@ public class PoolBuilder<T, CONF extends PoolConfig<T>> {
      *
      * @return a builder of {@link Pool} with LIFO pending acquire ordering
      */
-    public InstrumentedPool<T> lifo() {
+    public Pool<T> lifo() {
         return build(SimpleLifoPool::new);
     }
 
@@ -317,8 +318,16 @@ public class PoolBuilder<T, CONF extends PoolConfig<T>> {
      *
      * @return a builder of {@link Pool} with FIFO pending acquire ordering
      */
-    public InstrumentedPool<T> fifo() {
+    public Pool<T> fifo() {
         return build(SimpleFifoPool::new);
+    }
+
+    public <B> MetadataHandlingPool<T, B> priority(Comparator<B> comparator) {
+        return new SimpleLockingPriorityPool<>(buildConfig(), comparator);
+    }
+
+    public <B extends Comparable<? super B>> MetadataHandlingPool<T, B> priority() {
+        return new SimpleLockingPriorityPool<T, B>(buildConfig(), Comparator.naturalOrder());
     }
 
     /**
